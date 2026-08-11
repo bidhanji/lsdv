@@ -9,7 +9,7 @@ so we keep trying until we have enough.
 NOTE: NCBI blocks automated requests from cloud servers,
 so we use ENA instead. ENA is the European mirror of GenBank.
 
-Author: beginner bioinformatics student
+Author: Bidhan Koirala
 Date: 2026
 """
 
