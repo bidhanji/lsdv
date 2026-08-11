@@ -112,7 +112,7 @@ data/
 
 ## Author
 
-This pipeline was written by a beginner bioinformatics student as a learning exercise.
+This pipeline was written by me a recent BVsc&AH graduate and a beginner who is learning biopython as a learning exercise.
 
 ## License
 
