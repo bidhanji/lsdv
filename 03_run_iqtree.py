@@ -75,14 +75,14 @@ os.makedirs("data/tree", exist_ok=True)
 # -s : input alignment file
 # -m MFP : Model Finder Plus (tests many models, picks best)
 # -bb 1000 : ultrafast bootstrap with 1000 replicates
-# -nt 2 : use 2 threads
+# -nt AUTO : automatically choose number of threads
 # -pre : prefix for output files
 iqtree_command = [
     iqtree_cmd,
     "-s", alignment_file,
     "-m", "MFP",
     "-bb", "1000",
-    "-nt", "2",
+    "-nt", "AUTO",
     "-pre", "data/tree/lsdv_tree",
     "-redo"
 ]
