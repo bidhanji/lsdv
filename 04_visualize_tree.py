@@ -3,14 +3,14 @@
 Script to visualize the phylogenetic tree from IQ-TREE.
 Uses matplotlib + Bio.Phylo instead of ete3 (which needs PyQt).
 
-Author: beginner bioinformatics student
-Date: 2026
+Author: Bidhan Koirala
+Date: 8/12/2026
 """
 
 # import what we need
 import os
 import matplotlib
-matplotlib.use('Agg')  # no display needed
+matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
 from Bio import Phylo
 
