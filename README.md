@@ -51,7 +51,7 @@ conda install -c bioconda iqtree
 ### Option 1: Run everything at once
 
 ```bash
-bash run_all.sh
+python3 run_all.py
 ```
 
 ### Option 2: Run each step separately
@@ -63,12 +63,12 @@ python3 01_download_genomes.py
 
 **Step 2: Align sequences**
 ```bash
-bash 02_run_alignment.sh
+python3 02_run_alignment.py
 ```
 
 **Step 3: Build phylogenetic tree**
 ```bash
-bash 03_run_iqtree.sh
+python3 03_run_iqtree.py
 ```
 
 **Step 4: Visualize tree**
