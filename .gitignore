@@ -1,0 +1,15 @@
+# Ignore data files (they are too big for GitHub)
+data/genomes/
+data/alignment/
+data/tree/
+
+# Keep the data directory structure
+!data/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db
