@@ -4,8 +4,8 @@
 # This takes the aligned sequences and builds
 # a maximum likelihood tree.
 #
-# Author: beginner bioinformatics student
-# Date: 2026
+# Author: Bidhan Koirala
+# Date: 8/10/2026
 # =============================================
 
 echo "==========================================="
