@@ -1,0 +1,13 @@
+# Python package dependencies for lsdv
+# Install with: pip install -r requirements.txt
+
+matplotlib>=3.4
+biopython>=1.79
+
+# NOTE: The workflow also requires external system binaries which are NOT Python packages:
+# - mafft (multiple sequence alignment)
+# - iqtree (phylogenetic tree building)
+# Install system tools via apt or conda (examples):
+#   sudo apt install mafft iqtree
+#   or
+#   conda install -c bioconda mafft iqtree
