@@ -12,6 +12,13 @@ This pipeline:
 3. Builds a phylogenetic tree with IQ-TREE (maximum likelihood method)
 4. Visualizes the tree with matplotlib
 
+## Installation / prerequisites
+
+Python packages:
+- Install the Python deps listed in requirements.txt:
+  ```bash
+  pip install -r requirements.txt   
+
 ## Requirements
 
 You need these software installed:
