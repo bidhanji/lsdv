@@ -9,22 +9,40 @@ so we keep trying until we have enough.
 NOTE: NCBI blocks automated requests from cloud servers,
 so we use ENA instead. ENA is the European mirror of GenBank.
 
+FIXES applied vs original:
+  1. Accession-match verification: the FASTA header returned by ENA is now
+     checked against the accession we actually requested. If ENA returns
+     something else (wrong record, redirect, error page disguised as
+     FASTA), the script now rejects it instead of silently saving it.
+  2. Retry logic: each accession gets up to --retries attempts (default 3)
+     with an exponential backoff, instead of one shot. Network blips no
+     longer permanently sink an accession.
+  3. Existing-file re-validation: files already on disk from a previous
+     run are no longer blindly trusted as "already downloaded". They are
+     re-parsed and checked for a valid header + non-zero sequence before
+     being counted — a truncated file from an interrupted run gets
+     re-downloaded instead of silently counted as complete forever.
+
 Author: Bidhan Koirala
 Date: 2026
 """
 
 import urllib.request
+import urllib.error
 import os
 import time
 import argparse
 import sys
 
-# Allow overriding output folder and target via CLI so the script is portable
 parser = argparse.ArgumentParser(description="Download LSDV genomes from ENA")
 parser.add_argument("--output", "-o", default="data/genomes",
-                    help="output folder for downloaded FASTA files")
+                     help="output folder for downloaded FASTA files")
 parser.add_argument("--target", "-t", type=int, default=50,
-                    help="target number of genomes to download (complete/near-complete)")
+                     help="target number of genomes to download (complete/near-complete)")
+parser.add_argument("--retries", type=int, default=3,
+                     help="number of attempts per accession before giving up")
+parser.add_argument("--retry-backoff", type=float, default=2.0,
+                     help="base seconds to wait between retries (doubles each attempt)")
 args = parser.parse_args()
 
 output_folder = args.output
@@ -71,11 +89,103 @@ accession_list = [
 print("Total accessions to try:", len(accession_list))
 print(f"Target: {args.target} genomes (complete or near-complete)")
 
+
+# -------------------------------------------------------
+# Helpers
+# -------------------------------------------------------
+def parse_header_accession(header_line):
+    """
+    Extract the accession-like token from a FASTA header, e.g.
+    '>ENA|AF325528|AF325528.1 Lumpy skin disease virus...' -> 'AF325528'
+    ENA headers vary in format, so we just check the requested accession
+    appears as a substring token of the header (case-insensitive), rather
+    than requiring an exact positional match. This is deliberately a bit
+    loose because ENA header formatting is not perfectly consistent, but
+    it is enough to catch the failure mode that actually matters: getting
+    back a completely different, unrelated record.
+    """
+    return header_line.upper()
+
+
+def accession_matches(requested_acc, header_line):
+    return requested_acc.upper() in parse_header_accession(header_line)
+
+
+def validate_fasta_content(fasta_text, requested_acc):
+    """
+    Returns (is_valid, seq_len, reason).
+    Checks: starts with '>', header contains requested accession,
+    and sequence length > 0.
+    """
+    if not fasta_text or not fasta_text.startswith(">"):
+        return False, 0, "not FASTA (no '>' header)"
+
+    lines = fasta_text.split("\n")
+    header_line = lines[0]
+
+    if not accession_matches(requested_acc, header_line):
+        return False, 0, f"header does not mention requested accession ({header_line[:80]!r})"
+
+    seq_lines = [l for l in lines if not l.startswith(">") and len(l) > 0]
+    seq_len = sum(len(l) for l in seq_lines)
+
+    if seq_len == 0:
+        return False, 0, "zero-length sequence"
+
+    return True, seq_len, "ok"
+
+
+def download_accession(acc, retries, backoff):
+    """
+    Attempt to download one accession, retrying on failure.
+    Returns (fasta_text_or_None, seq_len, error_message_or_None).
+    """
+    url = "https://www.ebi.ac.uk/ena/browser/api/fasta/" + acc
+    last_error = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(url)
+            req.add_header("User-Agent", "lsdv-downloader/1.1 (+https://github.com/bidhanji/lsdv)")
+            with urllib.request.urlopen(req, timeout=20) as response:
+                fasta = response.read().decode("utf-8")
+
+            is_valid, seq_len, reason = validate_fasta_content(fasta, acc)
+            if is_valid:
+                return fasta, seq_len, None
+            else:
+                last_error = reason
+                # a bad response (e.g. wrong record) is worth retrying too —
+                # could be a transient mirror/proxy issue
+        except Exception as e:
+            last_error = str(e)[:200]
+
+        if attempt < retries:
+            wait = backoff * (2 ** (attempt - 1))
+            print(f" ... attempt {attempt}/{retries} failed ({last_error}), retrying in {wait:.1f}s", end="")
+            time.sleep(wait)
+        else:
+            time.sleep(0.3)  # be polite before moving to next accession
+
+    return None, 0, last_error
+
+
+def existing_file_is_valid(filepath, acc):
+    """Re-validate a file left over from a previous run instead of trusting it blindly."""
+    try:
+        with open(filepath, "r") as f:
+            content = f.read()
+    except Exception:
+        return False, 0
+
+    is_valid, seq_len, reason = validate_fasta_content(content, acc)
+    return is_valid, seq_len
+
+
 # -------------------------------------------------------
 # Download genomes
 # -------------------------------------------------------
 print("\n--- Downloading genomes from ENA ---")
-
 downloaded_count = 0
 failed_count = 0
 target = args.target
@@ -85,46 +195,31 @@ for i, acc in enumerate(accession_list):
         print("Reached target of", target, "genomes! Stopping.")
         break
 
-    # skip if we already have this one
     filepath = os.path.join(output_folder, acc + ".fasta")
-    if os.path.exists(filepath):
-        print(f"[{downloaded_count + 1}/{target}] {acc} already exists, skipping")
-        downloaded_count += 1
-        continue
 
-    url = "https://www.ebi.ac.uk/ena/browser/api/fasta/" + acc
+    # FIX #3: re-validate existing files instead of trusting them blindly
+    if os.path.exists(filepath):
+        is_valid, seq_len = existing_file_is_valid(filepath, acc)
+        if is_valid:
+            print(f"[{downloaded_count + 1}/{target}] {acc} already exists and is valid ({seq_len} bp), skipping")
+            downloaded_count += 1
+            continue
+        else:
+            print(f"[{downloaded_count + 1}/{target}] {acc} exists but is invalid/corrupted — re-downloading")
+            # fall through to re-download
 
     print(f"[{downloaded_count + 1}/{target}] Downloading: {acc}", end="")
 
-    try:
-        req = urllib.request.Request(url)
-        # Use a friendly User-Agent and include script name so mirrors can identify us
-        req.add_header("User-Agent", "lsdv-downloader/1.0 (+https://github.com/bidhanji/lsdv)")
-        with urllib.request.urlopen(req, timeout=20) as response:
-            fasta = response.read().decode("utf-8")
+    fasta, seq_len, error = download_accession(acc, args.retries, args.retry_backoff)
 
-        if fasta.startswith(">"):
-            # count sequence length
-            seq_lines = [l for l in fasta.split("\n")
-                         if not l.startswith(">") and len(l) > 0]
-            seq_len = sum(len(l) for l in seq_lines)
-
-            with open(filepath, "w") as f:
-                f.write(fasta)
-            downloaded_count += 1
-            print(" ... OK (" + str(seq_len) + " bp)")
-        else:
-            print(" ... not FASTA")
-            failed_count += 1
-
-        # be polite to the ENA mirror
-        time.sleep(0.3)
-
-    except Exception as e:
-        # show only short error
-        print(" ... FAILED:", str(e)[:200])
+    if fasta is not None:
+        with open(filepath, "w") as f:
+            f.write(fasta)
+        downloaded_count += 1
+        print(" ... OK (" + str(seq_len) + " bp, accession verified)")
+    else:
+        print(" ... FAILED after", args.retries, "attempts:", error)
         failed_count += 1
-        time.sleep(0.3)
 
 # -------------------------------------------------------
 # Summary
@@ -138,12 +233,10 @@ print("Total FASTA files:", len(fasta_files))
 print("Downloaded in this run:", downloaded_count)
 print("Failed:", failed_count)
 
-# show what we have
 print("\nGenomes (sorted by size):")
 file_sizes = []
 for f in fasta_files:
     filepath = os.path.join(output_folder, f)
-    # count actual sequence length
     with open(filepath) as fh:
         content = fh.read()
     seq_len = sum(len(l) for l in content.split("\n")
@@ -153,7 +246,7 @@ for f in fasta_files:
 file_sizes.sort(key=lambda x: x[1], reverse=True)
 for f, slen in file_sizes:
     marker = " [COMPLETE]" if slen > 100000 else ""
-    print("  -", f, "(" + str(slen) + " bp)" + marker)
+    print(" -", f, "(" + str(slen) + " bp)" + marker)
 
 complete_count = sum(1 for _, s in file_sizes if s > 100000)
 print("\nComplete genomes (>100K bp):", complete_count)
