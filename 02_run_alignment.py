@@ -4,59 +4,57 @@ Script to run MAFFT alignment on LSDV genomes.
 This script combines all FASTA files into one
 and then runs MAFFT to align them.
 
-Author: beginner bioinformatics student
+Author: improved for portability
 Date: 2026
 """
 
-# import what we need
 import os
 import subprocess
 import glob
+import shutil
+import argparse
+import sys
 
-# print what we are doing
-print("===========================================")
-print("STEP 2: Running MAFFT Multiple Alignment")
-print("===========================================")
+parser = argparse.ArgumentParser(description="Combine FASTA files and run MAFFT alignment")
+parser.add_argument("--genome-dir", default="data/genomes",
+                    help="Directory containing individual genome FASTA files")
+parser.add_argument("--align-dir", default="data/alignment",
+                    help="Directory to write combined and aligned files")
+parser.add_argument("--mafft", default=None,
+                    help="Path to mafft executable (or set MAFFT_PATH env var)")
+parser.add_argument("--threads", default="-1",
+                    help="Number of threads for MAFFT (use -1 for auto)")
+args = parser.parse_args()
 
-# -------------------------------------------------------
-# STEP 1: Find MAFFT executable
-# -------------------------------------------------------
-print("\n--- Looking for MAFFT ---")
+# find mafft: prefer explicit argument, then env var, then PATH
+def find_executable(names, env_var=None):
+    if env_var:
+        p = os.environ.get(env_var)
+        if p and shutil.which(p):
+            return p
+    for n in names:
+        p = shutil.which(n)
+        if p:
+            return p
+    return None
 
-# try system mafft first
-mafft_cmd = "mafft"
+mafft_cmd = args.mafft or find_executable(["mafft"], env_var="MAFFT_PATH")
+if not mafft_cmd:
+    print("ERROR: MAFFT executable not found on PATH or via MAFFT_PATH.")
+    print("Install MAFFT: 'sudo apt install mafft' or 'conda install -c bioconda mafft'")
+    print("Or pass --mafft /full/path/to/mafft")
+    sys.exit(1)
 
-# check if mafft is installed system-wide
-try:
-    result = subprocess.run([mafft_cmd, "--version"], capture_output=True, text=True)
-    print("Found system MAFFT:", result.stdout.strip())
-except FileNotFoundError:
-    # try local install
-    local_mafft = "/home/work/.openclaw/workspace/mafft-linux64/mafftdir/bin/mafft"
-    if os.path.exists(local_mafft):
-        mafft_cmd = local_mafft
-        os.environ["MAFFT_BINARIES"] = "/home/work/.openclaw/workspace/mafft-linux64/mafftdir/libexec"
-        print("Using local MAFFT:", local_mafft)
-    else:
-        print("ERROR: MAFFT not found!")
-        print("Please install MAFFT:")
-        print("  sudo apt install mafft")
-        print("  OR conda install -c bioconda mafft")
-        exit(1)
-
-# -------------------------------------------------------
-# STEP 2: Combine all FASTA files into one
-# -------------------------------------------------------
-print("\n--- STEP 1: Combining all FASTA files ---")
+print("Using MAFFT executable:", mafft_cmd)
 
 # where our individual genomes are
-genome_dir = "data/genomes"
+genome_dir = args.genome_dir
+os.makedirs(args.align_dir, exist_ok=True)
 
-# check if directory exists
 if not os.path.exists(genome_dir):
     print("ERROR: Directory", genome_dir, "does not exist!")
-    print("Please run 01_download_genomes.py first.")
-    exit(1)
+    print("Please run 01_download_genomes.py first or point --genome-dir to your FASTA files.")
+    sys.exit(1)
 
 # find all FASTA files
 fasta_files = glob.glob(os.path.join(genome_dir, "*.fasta"))
@@ -65,79 +63,51 @@ print("Found", len(fasta_files), "FASTA files in", genome_dir)
 if len(fasta_files) == 0:
     print("ERROR: No FASTA files found!")
     print("Please run 01_download_genomes.py first.")
-    exit(1)
-
-# create output directory
-os.makedirs("data/alignment", exist_ok=True)
+    sys.exit(1)
 
 # combine all FASTA files into one
-combined_file = "data/alignment/all_genomes_combined.fasta"
+combined_file = os.path.join(args.align_dir, "all_genomes_combined.fasta")
 print("Combining all FASTA files into:", combined_file)
-
-# open the output file for writing
 with open(combined_file, "w") as outfile:
-    # loop through each FASTA file
     for fasta_file in sorted(fasta_files):
-        # read the file
         with open(fasta_file, "r") as infile:
             content = infile.read()
-        # write to combined file
         outfile.write(content)
-        # make sure there is a newline between files
         outfile.write("\n")
 
 # count how many sequences we combined
 with open(combined_file, "r") as f:
     content = f.read()
-    num_sequences = content.count(">")
-    print("Combined", len(fasta_files), "files")
-    print("Total sequences in combined file:", num_sequences)
-
-# -------------------------------------------------------
-# STEP 3: Run MAFFT alignment
-# -------------------------------------------------------
-print("\n--- STEP 2: Running MAFFT alignment ---")
-print("This might take a few minutes...")
-
-# the input and output files
-input_file = combined_file
-output_file = "data/alignment/lsdv_aligned.fasta"
-
-# build the MAFFT command
-# --auto : let MAFFT choose the best algorithm
-# --thread -1 : use all CPU cores
-# --reorder : reorder sequences by similarity
-mafft_command = [mafft_cmd, "--auto", "--thread", "-1", "--reorder", input_file]
-
-print("Running:", " ".join(mafft_command))
-print("Please wait...")
+num_sequences = content.count(">")
+print("Combined", len(fasta_files), "files")
+print("Total sequences in combined file:", num_sequences)
 
 # run MAFFT
-# subprocess.run runs a command and waits for it to finish
-# stdout goes to the output file
-# stderr goes to a log file
-with open(output_file, "w") as out_f:
-    with open("data/alignment/mafft.log", "w") as log_f:
-        result = subprocess.run(mafft_command, stdout=out_f, stderr=log_f)
+output_file = os.path.join(args.align_dir, "lsdv_aligned.fasta")
+log_file = os.path.join(args.align_dir, "mafft.log")
 
-# check if it worked
-if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-    print("\nAlignment complete!")
-    print("Output file:", output_file)
+mafft_command = [mafft_cmd, "--auto", "--thread", args.threads, "--reorder", combined_file]
+print("Running MAFFT:\n ", " ".join(mafft_command))
+print("This may take some time...")
 
-    # count aligned sequences
-    with open(output_file, "r") as f:
-        content = f.read()
-        aligned_count = content.count(">")
-        print("Number of aligned sequences:", aligned_count)
+# run and capture stderr to log
+with open(output_file, "w") as out_f, open(log_file, "w") as log_f:
+    proc = subprocess.run(mafft_command, stdout=out_f, stderr=log_f)
 
-    # file size
-    file_size = os.path.getsize(output_file)
-    print("File size:", file_size // 1024, "KB")
-else:
-    print("ERROR: Alignment failed!")
-    print("Check the log: data/alignment/mafft.log")
-    exit(1)
+if proc.returncode != 0 or not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
+    print("ERROR: MAFFT failed. See log:", log_file)
+    sys.exit(proc.returncode if proc.returncode != 0 else 1)
+
+print("\nAlignment complete!")
+print("Output file:", output_file)
+
+with open(output_file, "r") as f:
+    content = f.read()
+    aligned_count = content.count(">")
+    print("Number of aligned sequences:", aligned_count)
+
+file_size = os.path.getsize(output_file)
+print("File size:", file_size // 1024, "KB")
 
 print("\nDone! Next step: build the phylogenetic tree with IQ-TREE.")
-print("Run: python3 03_run_iqtree.py")
+print("Run: python3 03_run_iqtree.py --alignment {} --out-dir data/tree".format(output_file))
