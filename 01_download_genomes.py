@@ -16,11 +16,20 @@ Date: 2026
 import urllib.request
 import os
 import time
+import argparse
+import sys
 
-# output folder
-output_folder = "data/genomes"
+# Allow overriding output folder and target via CLI so the script is portable
+parser = argparse.ArgumentParser(description="Download LSDV genomes from ENA")
+parser.add_argument("--output", "-o", default="data/genomes",
+                    help="output folder for downloaded FASTA files")
+parser.add_argument("--target", "-t", type=int, default=50,
+                    help="target number of genomes to download (complete/near-complete)")
+args = parser.parse_args()
+
+output_folder = args.output
 if not os.path.exists(output_folder):
-    os.makedirs(output_folder)
+    os.makedirs(output_folder, exist_ok=True)
     print("Created folder:", output_folder)
 
 # -------------------------------------------------------
@@ -60,7 +69,7 @@ accession_list = [
 ]
 
 print("Total accessions to try:", len(accession_list))
-print("Target: 50 genomes (complete or near-complete)")
+print(f"Target: {args.target} genomes (complete or near-complete)")
 
 # -------------------------------------------------------
 # Download genomes
@@ -69,38 +78,35 @@ print("\n--- Downloading genomes from ENA ---")
 
 downloaded_count = 0
 failed_count = 0
-target = 50
+target = args.target
 
-for i in range(len(accession_list)):
+for i, acc in enumerate(accession_list):
     if downloaded_count >= target:
         print("Reached target of", target, "genomes! Stopping.")
         break
 
-    acc = accession_list[i]
-
     # skip if we already have this one
     filepath = os.path.join(output_folder, acc + ".fasta")
     if os.path.exists(filepath):
-        print("[" + str(downloaded_count + 1) + "/" + str(target) + "]",
-              acc, "already exists, skipping")
+        print(f"[{downloaded_count + 1}/{target}] {acc} already exists, skipping")
         downloaded_count += 1
         continue
 
     url = "https://www.ebi.ac.uk/ena/browser/api/fasta/" + acc
 
-    print("[" + str(downloaded_count + 1) + "/" + str(target) + "]",
-          "Downloading:", acc, end="")
+    print(f"[{downloaded_count + 1}/{target}] Downloading: {acc}", end="")
 
     try:
         req = urllib.request.Request(url)
-        req.add_header("User-Agent", "BioPython-tutorial/1.0")
-        with urllib.request.urlopen(req, timeout=10) as response:
+        # Use a friendly User-Agent and include script name so mirrors can identify us
+        req.add_header("User-Agent", "lsdv-downloader/1.0 (+https://github.com/bidhanji/lsdv)")
+        with urllib.request.urlopen(req, timeout=20) as response:
             fasta = response.read().decode("utf-8")
 
         if fasta.startswith(">"):
             # count sequence length
             seq_lines = [l for l in fasta.split("\n")
-                        if not l.startswith(">") and len(l) > 0]
+                         if not l.startswith(">") and len(l) > 0]
             seq_len = sum(len(l) for l in seq_lines)
 
             with open(filepath, "w") as f:
@@ -111,10 +117,12 @@ for i in range(len(accession_list)):
             print(" ... not FASTA")
             failed_count += 1
 
+        # be polite to the ENA mirror
         time.sleep(0.3)
 
     except Exception as e:
-        print(" ... FAILED:", str(e)[:50])
+        # show only short error
+        print(" ... FAILED:", str(e)[:200])
         failed_count += 1
         time.sleep(0.3)
 
@@ -152,6 +160,6 @@ print("\nComplete genomes (>100K bp):", complete_count)
 print("Total genomes:", len(fasta_files))
 
 if len(fasta_files) >= 2:
-    print("\nReady for alignment! Run: bash 02_run_alignment.sh")
+    print("\nReady for alignment! Run: python3 02_run_alignment.py")
 else:
     print("\nNot enough genomes. Check your connection.")
